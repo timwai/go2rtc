@@ -28,7 +28,7 @@ Existing credentials are read from the YAML xiaomi section. If multiple valid
 accounts exist, use -account with the local Xiaomi user ID. The program does
 not write configuration, send device control actions by default, or print
 IDs, IP addresses, token, keys, signed URLs, or raw cloud errors.
-Only the first device-list page is examined, consistent with the base branch.
+Device discovery now checks paginated account lists, the legacy list, and merged home lists (including shared homes when returned by Xiaomi). Secondary failures are printed without identifiers.
 Do not share the YAML. The opt-in HLS action may open a session on the camera;
 no stop-stream action is sent because it may affect another viewer. A signed
 URL is passed locally to ffprobe and may be visible to local process inspection.
@@ -54,9 +54,9 @@ docker run --rm -v "$PWD/xiaomi-probe:/probe:ro" \
 - cs2 with has_p2p_id and has_init_string: candidate for remote relay research.
 - video_packets_received: ffprobe received video packets from the opt-in HLS stream.
 - cloud_action_failed or no_http_stream_url: cloud HLS path did not work for this run.
-- not_in_first_device_page: not found in the first list page; not a definitive offline status.
+- not_in_discovered_devices: not found through discovery; not a definitive offline status. Use -inventory to list model counts.
 
-CS2 relay transport, session keys retained for a real session, reconnect,
+CS2 relay media transport after relay-ready, session linking, session keys retained for a real session, reconnect,
 audio/video decoding, dual-channel playback, 24h recording, and other
 models' HLS actions are NOT implemented here. The probe intentionally
 discards generated private keys after provisioning. A separate relay driver
@@ -70,3 +70,20 @@ References:
 - https://home.miot-spec.com/spec/chuangmi.camera.ipc019
 - https://home.miot-spec.com/spec/chuangmi.camera.069a01
 - https://home.miot-spec.com/spec/isa.camera.cw501d
+
+## P0-B1: relay negotiation (experimental)
+
+```sh
+./xiaomi-probe -config /path/to/go2rtc.yaml -region cn -inventory
+./xiaomi-probe -config /path/to/go2rtc.yaml -region cn -models chuangmi.camera.ipc019,isa.camera.cw501d -relay
+./xiaomi-probe -config /path/to/go2rtc.yaml -region cn -models chuangmi.camera.ipc019 -hls
+```
+
+Relay mode uses the cloud-provided CS2 rendezvous parameters, sends bounded UDP
+requests, obtains a session port and waits for relay ready. It closes the socket
+without starting video. It requires outbound UDP and can temporarily establish a
+camera relay session. The tool reports only stages and counts, not endpoints or tokens.
+Statuses: invalid_relay_parameters, udp_open_failed, no_relay_candidates,
+relay_hello_timeout, relay_port_timeout, relay_join_timeout, relay_ready.
+HLS response shape reports known keys and types only. A ready relay is not proof
+of MISS authentication or playable video. No long-running connection or recorder yet.
