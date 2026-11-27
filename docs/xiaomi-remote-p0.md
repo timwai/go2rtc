@@ -98,3 +98,24 @@ official HA OAuth session may have a different device scope from go2rtc's token.
 A visible shared camera is not proof of MISS or HLS access. The owner account
 is not required for discovery if the recipient has the relevant cloud permission.
 Home-room pagination on the unmerged endpoint is not yet implemented.
+
+## P0-B2: short native media diagnostic
+
+```sh
+./xiaomi-probe -config /path/to/go2rtc.yaml -region cn -models chuangmi.camera.ipc019,chuangmi.camera.069a01 -media
+./xiaomi-probe -config /path/to/go2rtc.yaml -region cn -models isa.camera.cw501d -media -channel 1
+./xiaomi-probe -config /path/to/go2rtc.yaml -region cn -models isa.camera.cw501d -media -channel 2
+```
+
+The new -media option implies relay negotiation, retains the provisioning key pair
+and UDP socket, answers session linking, attempts MISS authentication and starts
+an encrypted video request. It handles ordered DRW fragments, acknowledgements
+and keepalive replies. It counts recognizable decrypted Annex-B video frames for
+up to 20 seconds after start and closes the session, without writing media.
+No ffprobe is required. Audio detection is based on codec ID and nonempty payload,
+not audio decoding. Video frame counts are not proof of full decoder compatibility.
+Channel 2 is experimental and should only be used for a dual-lens device.
+Relay negotiation retries up to three fresh sessions. The -relay flag alone
+still tests only relay readiness. The earlier P0-A/P0-B1 limits above describe
+those modes; -media is experimental and has not been tested with a physical device.
+No live Web player, recording, or persistent reconnect is implemented yet.
