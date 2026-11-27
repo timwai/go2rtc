@@ -186,6 +186,7 @@ func run() error {
 	hls:=flag.Bool("hls",false,"opt in to IPC019 cloud HLS and ffprobe")
 	relay:=flag.Bool("relay",false,"opt in to CS2 remote relay handshake")
 	inventory:=flag.Bool("inventory",false,"print camera model counts only")
+	did:=flag.String("did","","optional authorized device ID for targeted discovery (not printed)")
 	flag.Parse()
 	allowed:=map[string]bool{"cn":true,"de":true,"i2":true,"in":true,"ru":true,"sg":true,"tw":true,"us":true}
 	if !allowed[*region] {return fmt.Errorf("unsupported region")}
@@ -202,7 +203,7 @@ func run() error {
 	if token=="" {return fmt.Errorf("select an existing nonempty Xiaomi account with -account")}
 	cloud:=xiaomi.NewCloud("xiaomiio")
 	if cloud.LoginWithToken(*account,token)!=nil {return fmt.Errorf("Xiaomi token login failed; refresh login in go2rtc")}
-	devices,err:=discoverDevices(cloud,base)
+	devices,err:=discoverDevices(cloud,base,strings.TrimSpace(*did))
 	if err!=nil {return err}
 	if *inventory {
 		counts:=map[string]int{}
@@ -218,7 +219,7 @@ func run() error {
 	count:=map[string]int{}
 	enc:=json.NewEncoder(os.Stdout)
 	for _,d:=range devices {
-		if !selected[d.Model] || d.DID=="" {continue}
+		if !selected[d.Model] || d.DID=="" || (*did!="" && d.DID!=strings.TrimSpace(*did)) {continue}
 		count[d.Model]++
 		r:=report{Model:d.Model,Number:count[d.Model]}
 		provision(cloud,base,d,&r,*relay)
