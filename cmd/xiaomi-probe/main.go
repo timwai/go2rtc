@@ -7,6 +7,8 @@ import (
 	"flag"
 	"fmt"
 	"net/url"
+	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"sort"
@@ -53,6 +55,11 @@ type report struct {
 	Relay string `json:"relay,omitempty"`
 	RelayServers int `json:"relay_servers,omitempty"`
 	RelayCandidates int `json:"relay_candidates,omitempty"`
+	MISS string `json:"miss,omitempty"`
+	Media string `json:"media,omitempty"`
+	VideoFrames int `json:"video_frames,omitempty"`
+	VideoCodec string `json:"video_codec,omitempty"`
+	Channel int `json:"channel,omitempty"`
 	VideoPackets bool `json:"video_packets"`
 	AudioPackets bool `json:"audio_packets"`
 }
@@ -73,8 +80,8 @@ func request(c *xiaomi.Cloud, base, path string, payload any) ([]byte,error) {
 	return c.Request(base,path,string(b),nil)
 }
 
-func provision(c *xiaomi.Cloud,base string,d device,r *report, relay bool) {
-	pub,_,err:=crypto.GenerateKey()
+func provision(c *xiaomi.Cloud,base string,d device,r *report, relay, media bool, channel int) {
+	pub,priv,err:=crypto.GenerateKey()
 	if err!=nil {r.Provision="key_generation_failed";return}
 	b,err:=request(c,base,"/v2/device/miss_get_vendor",map[string]string{
 		"did":d.DID,"app_pubkey":fmt.Sprintf("%x",pub),"support_vendors":"TUTK_CS2_MTP",
@@ -90,7 +97,14 @@ func provision(c *xiaomi.Cloud,base string,d device,r *report, relay bool) {
 	r.Key=v.Public!=""
 	r.Sign=v.Sign!=""
 	r.Provision="response_received"
-	if relay && v.Vendor.ID==4 {r.Relay,r.RelayServers,r.RelayCandidates=probeRelay(v.Vendor.Params.UID,v.Vendor.Params.Init)}
+	if (relay || media) && v.Vendor.ID==4 {
+		var onReady func(*net.UDPConn,netip.AddrPort)
+		if media {
+			r.Channel=channel
+			onReady=func(s *net.UDPConn,peer netip.AddrPort) {probeMedia(s,peer,v,pub,priv,channel,r)}
+		}
+		r.Relay,r.RelayServers,r.RelayCandidates=probeRelay(v.Vendor.Params.UID,v.Vendor.Params.Init,onReady)
+	}
 }
 
 // Accept object, singleton array, and nested result responses without exposing values.
@@ -185,9 +199,13 @@ func run() error {
 	models:=flag.String("models","isa.camera.cw501d,chuangmi.camera.ipc019,chuangmi.camera.069a01,chuangmi.camera.81ac1","comma-separated model filter")
 	hls:=flag.Bool("hls",false,"opt in to IPC019 cloud HLS and ffprobe")
 	relay:=flag.Bool("relay",false,"opt in to CS2 remote relay handshake")
+	media:=flag.Bool("media",false,"opt in to MISS authentication and short remote media test")
+	channel:=flag.Int("channel",1,"video channel (1 or 2)")
 	inventory:=flag.Bool("inventory",false,"print camera model counts only")
 	did:=flag.String("did","","optional authorized device ID for targeted discovery (not printed)")
 	flag.Parse()
+	if *channel!=1 && *channel!=2 {return fmt.Errorf("channel must be 1 or 2")}
+	if *media && *hls {return fmt.Errorf("test media and HLS separately")}
 	allowed:=map[string]bool{"cn":true,"de":true,"i2":true,"in":true,"ru":true,"sg":true,"tw":true,"us":true}
 	if !allowed[*region] {return fmt.Errorf("unsupported region")}
 	base:="https://api.io.mi.com/app"
@@ -222,7 +240,7 @@ func run() error {
 		if !selected[d.Model] || d.DID=="" || (*did!="" && d.DID!=strings.TrimSpace(*did)) {continue}
 		count[d.Model]++
 		r:=report{Model:d.Model,Number:count[d.Model]}
-		provision(cloud,base,d,&r,*relay)
+		provision(cloud,base,d,&r,*relay,*media,*channel)
 		if *hls {probeHLS(cloud,base,d,&r)}
 		if err:=enc.Encode(r);err!=nil {return err}
 	}
