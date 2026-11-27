@@ -82,7 +82,10 @@ func NewClient(rawURL string) (*Client, error) {
 		return nil, err
 	}
 
-	return &Client{Conn: conn, key: key, model: model}, nil
+	client := &Client{Conn: conn, key: key, model: model}
+	// Authentication is complete; unsolicited control messages must not fill the LAN command queue.
+	go func(){for {if _,_,err:=conn.ReadCommand();err!=nil {return}}}()
+	return client, nil
 }
 
 func loginRelay(conn Conn,pub,sign string) error {
@@ -191,7 +194,7 @@ func (c *Client) StartMedia(channel, quality, audio string) error {
 		// Some models have low quality in quality 2.
 		// Different models require different default quality settings.
 		switch c.model {
-		case ModelC200, ModelC300:
+		case ModelC200, ModelC300, "isa.camera.cw501d":
 			quality = "3"
 		default:
 			quality = "2"

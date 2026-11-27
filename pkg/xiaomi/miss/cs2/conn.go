@@ -75,7 +75,7 @@ func handshake(host, transport string) (net.Conn, error) {
 	})
 	if err != nil {
 		_ = conn.Close()
-		return nil, err
+		return nil, fmt.Errorf("cs2: LAN search: %w",err)
 	}
 
 	var msgUDP, msgTCP byte
@@ -92,7 +92,7 @@ func handshake(host, transport string) (net.Conn, error) {
 	})
 	if err != nil {
 		_ = conn.Close()
-		return nil, err
+		return nil, fmt.Errorf("cs2: LAN punch: %w",err)
 	}
 
 	_ = conn.SetDeadline(time.Time{})
@@ -128,9 +128,12 @@ func (c *Conn) worker() {
 		// 4  d1    magic
 		// 5  00    channel
 		// 6  0000  seq
+		if n<4 {continue}
 		switch buf[1] {
 		case msgDrw:
+			if n<8 {continue}
 			ch := buf[5]
+			if ch>=byte(len(c.channels)) || c.channels[ch]==nil {continue}
 			channel := c.channels[ch]
 
 			if c.isTCP {
@@ -325,7 +328,7 @@ func (c *udpConn) Read(b []byte) (n int, err error) {
 			return 0, err
 		}
 
-		if string(addr.IP) == string(c.addr.IP) || n >= 8 {
+		if addr.IP.Equal(c.addr.IP) || n >= 8 {
 			//log.Printf("<- %x", b[:n])
 			return
 		}
@@ -358,7 +361,7 @@ func (c *udpConn) WriteUntil(req []byte, ok func(res []byte) bool) ([]byte, erro
 			return nil, err
 		}
 
-		if string(addr.IP) != string(c.addr.IP) || n < 16 {
+		if !addr.IP.Equal(c.addr.IP) || n < 16 {
 			continue // skip messages from another IP
 		}
 

@@ -80,7 +80,7 @@ func request(c *xiaomi.Cloud, base, path string, payload any) ([]byte,error) {
 	return c.Request(base,path,string(b),nil)
 }
 
-func provision(c *xiaomi.Cloud,base string,d device,r *report, relay, media bool, channel int) {
+func provision(c *xiaomi.Cloud,base string,d device,r *report, relay, media bool, channel,quality int) {
 	pub,priv,err:=crypto.GenerateKey()
 	if err!=nil {r.Provision="key_generation_failed";return}
 	b,err:=request(c,base,"/v2/device/miss_get_vendor",map[string]string{
@@ -101,7 +101,7 @@ func provision(c *xiaomi.Cloud,base string,d device,r *report, relay, media bool
 		var onReady func(*net.UDPConn,netip.AddrPort)
 		if media {
 			r.Channel=channel
-			onReady=func(s *net.UDPConn,peer netip.AddrPort) {probeMedia(s,peer,v,pub,priv,channel,r)}
+			onReady=func(s *net.UDPConn,peer netip.AddrPort) {probeMedia(s,peer,v,pub,priv,channel,quality,r)}
 		}
 		r.Relay,r.RelayServers,r.RelayCandidates=probeRelay(v.Vendor.Params.UID,v.Vendor.Params.Init,onReady)
 	}
@@ -203,7 +203,9 @@ func run() error {
 	channel:=flag.Int("channel",1,"video channel (1 or 2)")
 	inventory:=flag.Bool("inventory",false,"print camera model counts only")
 	did:=flag.String("did","","optional authorized device ID for targeted discovery (not printed)")
+	quality:=flag.Int("quality",2,"native video quality (0..3)")
 	flag.Parse()
+	if *quality<0 || *quality>3 {return fmt.Errorf("quality must be 0..3")}
 	if *channel!=1 && *channel!=2 {return fmt.Errorf("channel must be 1 or 2")}
 	if *media && *hls {return fmt.Errorf("test media and HLS separately")}
 	allowed:=map[string]bool{"cn":true,"de":true,"i2":true,"in":true,"ru":true,"sg":true,"tw":true,"us":true}
@@ -240,7 +242,7 @@ func run() error {
 		if !selected[d.Model] || d.DID=="" || (*did!="" && d.DID!=strings.TrimSpace(*did)) {continue}
 		count[d.Model]++
 		r:=report{Model:d.Model,Number:count[d.Model]}
-		provision(cloud,base,d,&r,*relay,*media,*channel)
+		provision(cloud,base,d,&r,*relay,*media,*channel,*quality)
 		if *hls {probeHLS(cloud,base,d,&r)}
 		if err:=enc.Encode(r);err!=nil {return err}
 	}

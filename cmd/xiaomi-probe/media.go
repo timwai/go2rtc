@@ -73,7 +73,7 @@ func localForRelay(s *net.UDPConn,peer netip.AddrPort) netip.AddrPort {
 	return netip.AddrPortFrom(ip,s.LocalAddr().(*net.UDPAddr).AddrPort().Port())
 }
 
-func probeMedia(s *net.UDPConn,peer netip.AddrPort,v vendorResponse,pub,priv []byte,channel int,r *report) {
+func probeMedia(s *net.UDPConn,peer netip.AddrPort,v vendorResponse,pub,priv []byte,channel,quality int,r *report) {
 	r.MISS="link_timeout"
 	local:=localForRelay(s,peer)
 	if !local.IsValid() {r.MISS="local_route_failed";return}
@@ -138,8 +138,8 @@ func probeMedia(s *net.UDPConn,peer netip.AddrPort,v vendorResponse,pub,priv []b
 						var a struct {Result string `json:"result"`}
 						if json.Unmarshal(msg[4:],&a)!=nil || a.Result!="success" {r.MISS="auth_rejected";end=time.Now();return true}
 						auth=true;r.MISS="authenticated";pending=nil
-						body:=map[string]int{"videoquality":2,"enableaudio":1}
-						if channel==2 {body["videoquality"]=-1;body["videoquality2"]=2}
+						body:=map[string]int{"videoquality":quality,"enableaudio":1}
+						if channel==2 {body["videoquality"]=-1;body["videoquality2"]=quality}
 						j,_:=json.Marshal(body)
 						enc,e:=crypto.Encode(append([]byte{0,0,1,2},j...),key)
 						if e!=nil {r.MISS="encrypt_failed";end=time.Now();return true}

@@ -20,7 +20,7 @@ type Producer struct {
 func Dial(rawURL string) (core.Producer, error) {
 	client, err := NewClient(rawURL)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("xiaomi: connect/auth: %w",err)
 	}
 
 	u, _ := url.Parse(rawURL)
@@ -29,7 +29,7 @@ func Dial(rawURL string) (core.Producer, error) {
 	err = client.StartMedia(query.Get("channel"), query.Get("subtype"), query.Get("audio"))
 	if err != nil {
 		_ = client.Close()
-		return nil, err
+		return nil, fmt.Errorf("xiaomi: start media: %w",err)
 	}
 
 	medias, err := probe(client, query.Get("audio") != "0")
