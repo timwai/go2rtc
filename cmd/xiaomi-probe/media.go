@@ -9,6 +9,9 @@ import (
 	"net/netip"
 	"time"
 
+	"github.com/AlexxIT/go2rtc/pkg/h264/annexb"
+	"github.com/AlexxIT/go2rtc/pkg/h265"
+
 	"github.com/AlexxIT/go2rtc/pkg/xiaomi/crypto"
 )
 
@@ -155,7 +158,7 @@ func probeMedia(s *net.UDPConn,peer netip.AddrPort,v vendorResponse,pub,priv []b
 							// Count only recognizable Annex-B video, not arbitrary decrypted bytes.
 							if bytes.HasPrefix(data,[]byte{0,0,1}) || bytes.HasPrefix(data,[]byte{0,0,0,1}) {
 								r.VideoPackets=true;r.VideoFrames++;r.Media="video_packets_received"
-								if codec==4 {r.VideoCodec="h264"} else {r.VideoCodec="h265"}
+								if codec==4 {r.VideoCodec="h264"} else {r.VideoCodec="h265";inspectHEVC(data,r)}
 							}
 						case 1024,1026,1027,1032:
 							if len(data)>0 {r.AudioPackets=true}
@@ -165,5 +168,21 @@ func probeMedia(s *net.UDPConn,peer netip.AddrPort,v vendorResponse,pub,priv []b
 			}
 			return true
 		})
+	}
+}
+
+func inspectHEVC(annexB []byte,r *report) {
+	avcc:=annexb.EncodeToAVCC(annexB)
+	for len(avcc)>=4 {
+		n:=int(binary.BigEndian.Uint32(avcc[:4]))
+		if n<=0 || n>len(avcc)-4 {return}
+		nalu:=avcc[4:4+n]
+		if len(nalu)>16 && (nalu[0]>>1)&0x3f==h265.NALUTypeSPS {
+			if sps:=h265.DecodeSPS(nalu);sps!=nil {
+				r.VideoWidth=int(sps.Width());r.VideoHeight=int(sps.Height())
+				return
+			}
+		}
+		avcc=avcc[4+n:]
 	}
 }

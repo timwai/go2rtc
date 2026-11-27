@@ -59,6 +59,9 @@ type report struct {
 	Media string `json:"media,omitempty"`
 	VideoFrames int `json:"video_frames,omitempty"`
 	VideoCodec string `json:"video_codec,omitempty"`
+	VideoWidth int `json:"video_width,omitempty"`
+	VideoHeight int `json:"video_height,omitempty"`
+	AudioCodec string `json:"audio_codec,omitempty"`
 	Channel int `json:"channel,omitempty"`
 	VideoPackets bool `json:"video_packets"`
 	AudioPackets bool `json:"audio_packets"`

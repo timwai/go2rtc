@@ -1,6 +1,8 @@
 package miss
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"net/url"
 	"time"
@@ -52,48 +54,88 @@ func Dial(rawURL string) (core.Producer, error) {
 	}, nil
 }
 
+type videoParameterSets struct {
+	vps []byte
+	sps []byte
+	pps []byte
+}
+
+func (s *videoParameterSets) add(avcc []byte, codec uint32) {
+	for len(avcc)>=4 {
+		n:=int(binary.BigEndian.Uint32(avcc[:4]))
+		if n<=0 || n>len(avcc)-4 {return}
+		nalu:=avcc[4:4+n]
+		if len(nalu)>0 {
+			var typ byte
+			if codec==codecH264 {typ=nalu[0]&0x1f} else {typ=(nalu[0]>>1)&0x3f}
+			switch {
+			case codec==codecH264 && typ==h264.NALUTypeSPS:
+				s.sps=bytes.Clone(nalu)
+			case codec==codecH264 && typ==h264.NALUTypePPS:
+				s.pps=bytes.Clone(nalu)
+			case codec==codecH265 && typ==h265.NALUTypeVPS:
+				s.vps=bytes.Clone(nalu)
+			case codec==codecH265 && typ==h265.NALUTypeSPS:
+				s.sps=bytes.Clone(nalu)
+			case codec==codecH265 && typ==h265.NALUTypePPS:
+				s.pps=bytes.Clone(nalu)
+			}
+		}
+		avcc=avcc[4+n:]
+	}
+}
+
+func (s *videoParameterSets) codec(codec uint32) *core.Codec {
+	switch codec {
+	case codecH264:
+		if len(s.sps)>0 && len(s.pps)>0 {
+			return h264.AVCCToCodec(h264.JoinNALU(s.sps,s.pps))
+		}
+	case codecH265:
+		if len(s.vps)>0 && len(s.sps)>0 && len(s.pps)>0 {
+			return h265.AVCCToCodec(h264.JoinNALU(s.vps,s.sps,s.pps))
+		}
+	}
+	return nil
+}
+
 func probe(client *Client, audio bool) ([]*core.Media, error) {
 	_ = client.SetDeadline(time.Now().Add(15 * time.Second))
 
 	var vcodec, acodec *core.Codec
+	var h264Sets,h265Sets videoParameterSets
+	var videoReadyAt time.Time
 
 	for {
 		pkt, err := client.ReadPacket()
 		if err != nil {
 			if vcodec != nil {
-				err = fmt.Errorf("no audio")
-			} else if acodec != nil {
-				err = fmt.Errorf("no video")
+				err = fmt.Errorf("video ready but audio codec was not detected")
 			}
 			return nil, fmt.Errorf("xiaomi: probe: %w", err)
 		}
 
 		switch pkt.CodecID {
 		case codecH264:
-			if vcodec == nil {
-				buf := annexb.EncodeToAVCC(pkt.Payload)
-				if h264.NALUType(buf) == h264.NALUTypeSPS {
-					vcodec = h264.AVCCToCodec(buf)
-				}
-			}
+			h264Sets.add(annexb.EncodeToAVCC(pkt.Payload),codecH264)
+			if vcodec==nil {vcodec=h264Sets.codec(codecH264)}
 		case codecH265:
-			if vcodec == nil {
-				buf := annexb.EncodeToAVCC(pkt.Payload)
-				if h265.NALUType(buf) == h265.NALUTypeVPS {
-					vcodec = h265.AVCCToCodec(buf)
-				}
-			}
+			h265Sets.add(annexb.EncodeToAVCC(pkt.Payload),codecH265)
+			if vcodec==nil {vcodec=h265Sets.codec(codecH265)}
+		case codecPCM:
+			if acodec==nil {acodec=&core.Codec{Name:core.CodecPCML,ClockRate:pkt.SampleRate()}}
+		case codecPCMU:
+			if acodec==nil {acodec=&core.Codec{Name:core.CodecPCMU,ClockRate:pkt.SampleRate()}}
 		case codecPCMA:
-			if acodec == nil {
-				acodec = &core.Codec{Name: core.CodecPCMA, ClockRate: pkt.SampleRate()}
-			}
+			if acodec==nil {acodec=&core.Codec{Name:core.CodecPCMA,ClockRate:pkt.SampleRate()}}
 		case codecOPUS:
-			if acodec == nil {
-				acodec = &core.Codec{Name: core.CodecOpus, ClockRate: 48000, Channels: 2}
-			}
+			if acodec==nil {acodec=&core.Codec{Name:core.CodecOpus,ClockRate:48000,Channels:2}}
 		}
 
-		if vcodec != nil && (acodec != nil || !audio) {
+		if vcodec!=nil && videoReadyAt.IsZero() {videoReadyAt=time.Now()}
+		// A camera may expose an audio codec unsupported by this go2rtc version.
+		// Do not let optional audio prevent an otherwise valid video stream from opening.
+		if vcodec!=nil && (!audio || acodec!=nil || time.Since(videoReadyAt)>=2*time.Second) {
 			break
 		}
 	}
@@ -157,6 +199,14 @@ func (p *Producer) Start() error {
 			} else {
 				name = core.CodecH265
 			}
+		case codecPCM:
+			name = core.CodecPCML
+			pkt2 = &core.Packet{Header:rtp.Header{Version:2,Marker:true,SequenceNumber:uint16(pkt.Sequence),Timestamp:audioTS},Payload:pkt.Payload}
+			audioTS += uint32(len(pkt.Payload)/2)
+		case codecPCMU:
+			name = core.CodecPCMU
+			pkt2 = &core.Packet{Header:rtp.Header{Version:2,Marker:true,SequenceNumber:uint16(pkt.Sequence),Timestamp:audioTS},Payload:pkt.Payload}
+			audioTS += uint32(len(pkt.Payload))
 		case codecPCMA:
 			name = core.CodecPCMA
 			pkt2 = &core.Packet{
