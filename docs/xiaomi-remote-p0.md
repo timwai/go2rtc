@@ -87,3 +87,14 @@ Statuses: invalid_relay_parameters, udp_open_failed, no_relay_candidates,
 relay_hello_timeout, relay_port_timeout, relay_join_timeout, relay_ready.
 HLS response shape reports known keys and types only. A ready relay is not proof
 of MISS authentication or playable video. No long-running connection or recorder yet.
+
+## Shared camera discovery
+
+The probe queries the account device list with explicit empty dids, shared homes,
+and the device detail API for home and room DIDs. The optional -did flag resolves
+an already authorized device by ID (for example from Home Assistant) and filters
+normal probe output to that device. It does not bypass Xiaomi permissions. The
+official HA OAuth session may have a different device scope from go2rtc's token.
+A visible shared camera is not proof of MISS or HLS access. The owner account
+is not required for discovery if the recipient has the relevant cloud permission.
+Home-room pagination on the unmerged endpoint is not yet implemented.
