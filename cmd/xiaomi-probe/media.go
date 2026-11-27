@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"time"
+	"strconv"
 
 	"github.com/AlexxIT/go2rtc/pkg/h264/annexb"
 	"github.com/AlexxIT/go2rtc/pkg/h265"
@@ -192,5 +193,42 @@ func inspectHEVC(annexB []byte,r *report) {
 			}
 		}
 		avcc=avcc[4+n:]
+	}
+}
+
+func probeLAN(d device,v vendorResponse,pub,priv []byte,channel,quality int,transport string,r *report) {
+	if d.IP=="" {r.LAN="no_lan_ip";return}
+	q:=url.Values{
+		"vendor":{"cs2"},
+		"model":{d.Model},
+		"client_public":{fmt.Sprintf("%x",pub)},
+		"client_private":{fmt.Sprintf("%x",priv)},
+		"device_public":{v.Public},
+		"sign":{v.Sign},
+		"transport":{transport},
+	}
+	u:=url.URL{Scheme:"xiaomi",Host:d.IP,RawQuery:q.Encode()}
+	client,err:=miss.NewClient(u.String())
+	if err!=nil {r.LAN="connect_or_auth_failed";return}
+	defer client.Close()
+	ch:="0"
+	if channel==2 {ch="1"}
+	if err=client.StartMedia(ch,strconv.Itoa(quality),"1");err!=nil {r.LAN="media_start_failed";return}
+	r.LAN="no_video_packets"
+	_ = client.SetDeadline(time.Now().Add(10*time.Second))
+	end:=time.Now().Add(10*time.Second)
+	for time.Now().Before(end) {
+		pkt,e:=client.ReadPacket()
+		if e!=nil {break}
+		if pkt.CodecID!=4 && pkt.CodecID!=5 {continue}
+		r.LANVideoFrames++
+		if pkt.CodecID==4 {r.LANVideoCodec="h264"} else {
+			r.LANVideoCodec="h265"
+			var tmp report
+			inspectHEVC(pkt.Payload,&tmp)
+			if tmp.VideoWidth>r.LANVideoWidth {r.LANVideoWidth=tmp.VideoWidth}
+			if tmp.VideoHeight>r.LANVideoHeight {r.LANVideoHeight=tmp.VideoHeight}
+		}
+		r.LAN="video_packets_received"
 	}
 }

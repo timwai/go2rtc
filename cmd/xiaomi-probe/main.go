@@ -17,12 +17,15 @@ import (
 
 	"github.com/AlexxIT/go2rtc/pkg/xiaomi"
 	"github.com/AlexxIT/go2rtc/pkg/xiaomi/crypto"
+	"github.com/AlexxIT/go2rtc/pkg/xiaomi/miss"
 	"gopkg.in/yaml.v3"
 )
 
 type device struct {
 	DID string `json:"did"`
 	Model string `json:"model"`
+	IP string `json:"localip"`
+	LocalIP string `json:"local_ip"`
 }
 
 type vendorResponse struct {
@@ -62,6 +65,11 @@ type report struct {
 	VideoWidth int `json:"video_width,omitempty"`
 	VideoHeight int `json:"video_height,omitempty"`
 	AudioCodec string `json:"audio_codec,omitempty"`
+	LAN string `json:"lan,omitempty"`
+	LANVideoFrames int `json:"lan_video_frames,omitempty"`
+	LANVideoCodec string `json:"lan_video_codec,omitempty"`
+	LANVideoWidth int `json:"lan_video_width,omitempty"`
+	LANVideoHeight int `json:"lan_video_height,omitempty"`
 	Channel int `json:"channel,omitempty"`
 	VideoPackets bool `json:"video_packets"`
 	AudioPackets bool `json:"audio_packets"`
@@ -83,7 +91,7 @@ func request(c *xiaomi.Cloud, base, path string, payload any) ([]byte,error) {
 	return c.Request(base,path,string(b),nil)
 }
 
-func provision(c *xiaomi.Cloud,base string,d device,r *report, relay, media bool, channel,quality int) {
+func provision(c *xiaomi.Cloud,base string,d device,r *report, relay, media, lan bool, channel,quality int, lanTransport string) {
 	pub,priv,err:=crypto.GenerateKey()
 	if err!=nil {r.Provision="key_generation_failed";return}
 	b,err:=request(c,base,"/v2/device/miss_get_vendor",map[string]string{
@@ -100,6 +108,8 @@ func provision(c *xiaomi.Cloud,base string,d device,r *report, relay, media bool
 	r.Key=v.Public!=""
 	r.Sign=v.Sign!=""
 	r.Provision="response_received"
+	if d.IP=="" {d.IP=d.LocalIP}
+	if lan && v.Vendor.ID==4 {probeLAN(d,v,pub,priv,channel,quality,lanTransport,r)}
 	if (relay || media) && v.Vendor.ID==4 {
 		var onReady func(*net.UDPConn,netip.AddrPort)
 		if media {
@@ -207,8 +217,11 @@ func run() error {
 	inventory:=flag.Bool("inventory",false,"print camera model counts only")
 	did:=flag.String("did","","optional authorized device ID for targeted discovery (not printed)")
 	quality:=flag.Int("quality",2,"native video quality (0..3)")
+	lan:=flag.Bool("lan",false,"test direct CS2 LAN media path")
+	lanTransport:=flag.String("lan-transport","udp","direct LAN transport: udp or tcp")
 	flag.Parse()
 	if *quality<0 || *quality>3 {return fmt.Errorf("quality must be 0..3")}
+	if *lanTransport!="udp" && *lanTransport!="tcp" {return fmt.Errorf("lan-transport must be udp or tcp")}
 	if *channel!=1 && *channel!=2 {return fmt.Errorf("channel must be 1 or 2")}
 	if *media && *hls {return fmt.Errorf("test media and HLS separately")}
 	allowed:=map[string]bool{"cn":true,"de":true,"i2":true,"in":true,"ru":true,"sg":true,"tw":true,"us":true}
@@ -245,7 +258,7 @@ func run() error {
 		if !selected[d.Model] || d.DID=="" || (*did!="" && d.DID!=strings.TrimSpace(*did)) {continue}
 		count[d.Model]++
 		r:=report{Model:d.Model,Number:count[d.Model]}
-		provision(cloud,base,d,&r,*relay,*media,*channel,*quality)
+		provision(cloud,base,d,&r,*relay,*media,*lan,*channel,*quality,*lanTransport)
 		if *hls {probeHLS(cloud,base,d,&r)}
 		if err:=enc.Encode(r);err!=nil {return err}
 	}
