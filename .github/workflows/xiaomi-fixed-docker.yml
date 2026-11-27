@@ -1,0 +1,43 @@
+name: Xiaomi fixed Docker image
+on:
+  push:
+    branches: [xiaomi-fix]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./pkg/xiaomi/
+      - run: go test -race ./pkg/xiaomi/
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          build-args: |
+            GO_VERSION=1.26
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/timwai/go2rtc:latest
+            ghcr.io/timwai/go2rtc:1.9.15-xiaomi-fix
