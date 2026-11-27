@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -48,6 +49,10 @@ type report struct {
 	Sign bool `json:"has_signature"`
 	Provision string `json:"provision"`
 	HLS string `json:"hls,omitempty"`
+	HLSShape string `json:"hls_shape,omitempty"`
+	Relay string `json:"relay,omitempty"`
+	RelayServers int `json:"relay_servers,omitempty"`
+	RelayCandidates int `json:"relay_candidates,omitempty"`
 	VideoPackets bool `json:"video_packets"`
 	AudioPackets bool `json:"audio_packets"`
 }
@@ -68,7 +73,7 @@ func request(c *xiaomi.Cloud, base, path string, payload any) ([]byte,error) {
 	return c.Request(base,path,string(b),nil)
 }
 
-func provision(c *xiaomi.Cloud,base string,d device,r *report) {
+func provision(c *xiaomi.Cloud,base string,d device,r *report, relay bool) {
 	pub,_,err:=crypto.GenerateKey()
 	if err!=nil {r.Provision="key_generation_failed";return}
 	b,err:=request(c,base,"/v2/device/miss_get_vendor",map[string]string{
@@ -85,24 +90,56 @@ func provision(c *xiaomi.Cloud,base string,d device,r *report) {
 	r.Key=v.Public!=""
 	r.Sign=v.Sign!=""
 	r.Provision="response_received"
+	if relay && v.Vendor.ID==4 {r.Relay,r.RelayServers,r.RelayCandidates=probeRelay(v.Vendor.Params.UID,v.Vendor.Params.Init)}
 }
 
+// Accept object, singleton array, and nested result responses without exposing values.
 func hlsURL(b []byte) (string,string) {
-	var v struct {
-		Code *int `json:"code"`
-		Out []struct {
-			PIID int `json:"piid"`
-			Value string `json:"value"`
-		} `json:"out"`
+	var root any
+	if json.Unmarshal(b,&root)!=nil {return "","invalid_action_response"}
+	for depth:=0;depth<4;depth++ {
+		switch v:=root.(type) {
+		case []any:
+			if len(v)!=1 {return "","unexpected_action_array"}
+			root=v[0]
+		case map[string]any:
+			if code,ok:=v["code"];ok && code!=nil && fmt.Sprint(code)!="0" {
+				return "","action_rejected"
+			}
+			if next,ok:=v["result"];ok {root=next;continue}
+			out,ok:=v["out"].([]any)
+			if !ok {return "","missing_action_output"}
+			for _,item:=range out {
+				value,ok:=item.(string)
+				if m,isMap:=item.(map[string]any);isMap {
+					if fmt.Sprint(m["piid"])!="5" {continue}
+					value,ok=m["value"].(string)
+				}
+				if !ok {continue}
+				u,err:=url.Parse(value)
+				if err==nil && u.Host!="" && (u.Scheme=="https" || u.Scheme=="http") {return value,"url_received"}
+			}
+			return "","no_http_stream_url"
+		default: return "","invalid_action_response"
+		}
 	}
-	if json.Unmarshal(b,&v)!=nil {return "","invalid_action_response"}
-	if v.Code!=nil && *v.Code!=0 {return "",fmt.Sprintf("action_code_%d",*v.Code)}
-	for _,item:=range v.Out {
-		if item.PIID!=5 {continue}
-		u,err:=url.Parse(item.Value)
-		if err==nil && u.Host!="" && (u.Scheme=="https" || u.Scheme=="http") {return item.Value,"url_received"}
+	return "","invalid_action_response"
+}
+
+func responseShape(b []byte) string {
+	var v any
+	if json.Unmarshal(b,&v)!=nil {return "invalid_json"}
+	switch x:=v.(type) {
+	case []any: return fmt.Sprintf("array:%d",len(x))
+	case map[string]any:
+		// Only known field names and value types, never values.
+		var keys []string
+		for _,k:=range []string{"code","result","out","message","did","siid","aiid"} {
+			if val,ok:=x[k];ok {keys=append(keys,fmt.Sprintf("%s:%T",k,val))}
+		}
+		return "object:"+strings.Join(keys,",")
+	default: return fmt.Sprintf("%T",v)
 	}
-	return "","no_http_stream_url"
 }
 
 func probeHLS(c *xiaomi.Cloud,base string,d device,r *report) {
@@ -114,6 +151,7 @@ func probeHLS(c *xiaomi.Cloud,base string,d device,r *report) {
 		"params":map[string]any{"did":d.DID,"siid":4,"aiid":1,"in":[]any{0}},
 	})
 	if err!=nil {r.HLS="cloud_action_failed";return}
+	r.HLSShape=responseShape(b)
 	stream,status:=hlsURL(b)
 	r.HLS=status
 	if stream=="" {return}
@@ -146,6 +184,8 @@ func run() error {
 	region:=flag.String("region","cn","account region")
 	models:=flag.String("models","isa.camera.cw501d,chuangmi.camera.ipc019,chuangmi.camera.069a01,chuangmi.camera.81ac1","comma-separated model filter")
 	hls:=flag.Bool("hls",false,"opt in to IPC019 cloud HLS and ffprobe")
+	relay:=flag.Bool("relay",false,"opt in to CS2 remote relay handshake")
+	inventory:=flag.Bool("inventory",false,"print camera model counts only")
 	flag.Parse()
 	allowed:=map[string]bool{"cn":true,"de":true,"i2":true,"in":true,"ru":true,"sg":true,"tw":true,"us":true}
 	if !allowed[*region] {return fmt.Errorf("unsupported region")}
@@ -162,26 +202,33 @@ func run() error {
 	if token=="" {return fmt.Errorf("select an existing nonempty Xiaomi account with -account")}
 	cloud:=xiaomi.NewCloud("xiaomiio")
 	if cloud.LoginWithToken(*account,token)!=nil {return fmt.Errorf("Xiaomi token login failed; refresh login in go2rtc")}
-	b,err:=request(cloud,base,"/v2/home/device_list_page",map[string]any{})
-	if err!=nil {return fmt.Errorf("device list request failed")}
-	var devices struct {List []device `json:"list"`}
-	if json.Unmarshal(b,&devices)!=nil {return fmt.Errorf("invalid device list")}
+	devices,err:=discoverDevices(cloud,base)
+	if err!=nil {return err}
+	if *inventory {
+		counts:=map[string]int{}
+		for _,d:=range devices {if strings.Contains(d.Model,".camera.") {counts[d.Model]++}}
+		keys:=make([]string,0,len(counts))
+		for k:=range counts {keys=append(keys,k)}
+		sort.Strings(keys)
+		for _,k:=range keys {fmt.Printf("%s %d\n",k,counts[k])}
+		return nil
+	}
 	selected:=map[string]bool{}
 	for _,m:=range strings.Split(*models,",") {selected[strings.TrimSpace(m)]=true}
 	count:=map[string]int{}
 	enc:=json.NewEncoder(os.Stdout)
-	for _,d:=range devices.List {
+	for _,d:=range devices {
 		if !selected[d.Model] || d.DID=="" {continue}
 		count[d.Model]++
 		r:=report{Model:d.Model,Number:count[d.Model]}
-		provision(cloud,base,d,&r)
+		provision(cloud,base,d,&r,*relay)
 		if *hls {probeHLS(cloud,base,d,&r)}
 		if err:=enc.Encode(r);err!=nil {return err}
 	}
 	for _,m:=range strings.Split(*models,",") {
 		m=strings.TrimSpace(m)
 		if m!="" && count[m]==0 {
-			if err:=enc.Encode(report{Model:m,Provision:"not_in_first_device_page"});err!=nil {return err}
+			if err:=enc.Encode(report{Model:m,Provision:"not_in_discovered_devices"});err!=nil {return err}
 		}
 	}
 	return nil
