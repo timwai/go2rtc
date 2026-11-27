@@ -5,8 +5,10 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
 	"time"
 	"strconv"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/AlexxIT/go2rtc/pkg/h265"
 
 	"github.com/AlexxIT/go2rtc/pkg/xiaomi/crypto"
+	"github.com/AlexxIT/go2rtc/pkg/xiaomi/miss"
 )
 
 // The probe uses bounded, ordered DRW reassembly and never persists video.
