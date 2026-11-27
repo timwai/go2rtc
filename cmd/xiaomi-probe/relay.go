@@ -91,7 +91,18 @@ func readRelay(s *net.UDPConn,until time.Time,handle func(relayMessage) bool) bo
 	return false
 }
 
-func probeRelay(uidString,init string) (string,int,int) {
+func probeRelay(uidString,init string, onReady func(*net.UDPConn,netip.AddrPort)) (string,int,int) {
+	var status string
+	var servers,candidates int
+	for attempt:=0;attempt<3;attempt++ {
+		status,servers,candidates=relayAttempt(uidString,init,onReady)
+		if status=="relay_ready" || status=="invalid_relay_parameters" || status=="udp_open_failed" {break}
+		if attempt<2 {time.Sleep(time.Second)}
+	}
+	return status,servers,candidates
+}
+
+func relayAttempt(uidString,init string,onReady func(*net.UDPConn,netip.AddrPort)) (string,int,int) {
 	servers:=relayServers(init)
 	uid:=encodeUID(uidString)
 	if len(servers)==0 || uid==nil {return "invalid_relay_parameters",len(servers),0}
@@ -125,8 +136,9 @@ func probeRelay(uidString,init string) (string,int,int) {
 	for i:=0;i<4 && !chosen.IsValid();i++ {
 		for a,tokens:=range candidates {
 			for t:=range tokens {register(a,t,4)}
-			send(a,0x70,nil)
 		}
+		time.Sleep(100*time.Millisecond)
+		for a:=range candidates {send(a,0x70,nil)}
 		readRelay(s,time.Now().Add(2500*time.Millisecond),func(m relayMessage)bool {
 			if m.Kind!=0x71 {return false}
 			for a:=range candidates {
@@ -154,7 +166,7 @@ func probeRelay(uidString,init string) (string,int,int) {
 		for _,a:=range servers {send(a,0x80,body)}
 		register(session,sessionToken,24)
 		if readRelay(s,time.Now().Add(2*time.Second),func(m relayMessage)bool{return m.Kind==0x84 && m.From==session}) {
-			// Release the diagnostic socket immediately; no media is requested.
+			if onReady!=nil {onReady(s,session)}
 			return "relay_ready",len(servers),n
 		}
 	}
