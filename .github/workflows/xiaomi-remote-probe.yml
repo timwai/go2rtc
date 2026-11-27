@@ -1,0 +1,32 @@
+name: Xiaomi remote probe
+on:
+  push:
+    branches: [xiaomi-remote]
+    paths:
+      - 'cmd/xiaomi-probe/**'
+      - 'pkg/xiaomi/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/xiaomi-remote-probe.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test ./cmd/xiaomi-probe
+      - run: go vet ./cmd/xiaomi-probe
+      - name: Build Linux probes
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o dist/xiaomi-probe-linux-amd64 ./cmd/xiaomi-probe
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o dist/xiaomi-probe-linux-arm64 ./cmd/xiaomi-probe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xiaomi-probe-linux
+          path: dist/
