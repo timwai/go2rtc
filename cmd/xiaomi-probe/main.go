@@ -17,7 +17,6 @@ import (
 
 	"github.com/AlexxIT/go2rtc/pkg/xiaomi"
 	"github.com/AlexxIT/go2rtc/pkg/xiaomi/crypto"
-	"github.com/AlexxIT/go2rtc/pkg/xiaomi/miss"
 	"gopkg.in/yaml.v3"
 )
 
