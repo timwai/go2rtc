@@ -42,7 +42,7 @@ func Init() {
 			}
 		}
 
-		log.Debug().Msgf("xiaomi: dial %s", rawURL)
+		log.Debug().Str("model",u.Query().Get("model")).Msg("xiaomi: dial")
 
 		return xiaomi.Dial(rawURL)
 	})
@@ -101,7 +101,7 @@ func getCameraURL(url *url.URL) (string, error) {
 
 	// The getMissURL request has a fallback to getP2PURL.
 	// But for known models we can save one request to the cloud.
-	if xiaomi.IsLegacy(model) {
+	if xiaomi.IsLegacy(model) && url.Query().Get("transport")!="relay" {
 		return getLegacyURL(url)
 	}
 	return getMissURL(url)
@@ -163,7 +163,7 @@ func getMissURL(url *url.URL) (string, error) {
 
 	res, err := cloudUserRequest(url.User, "/v2/device/miss_get_vendor", params)
 	if err != nil {
-		if strings.Contains(err.Error(), "no available vendor support") {
+		if strings.Contains(err.Error(), "no available vendor support") && query.Get("transport")!="relay" {
 			return getLegacyURL(url)
 		}
 		return "", err
@@ -174,6 +174,7 @@ func getMissURL(url *url.URL) (string, error) {
 			ID     byte `json:"vendor"`
 			Params struct {
 				UID string `json:"p2p_id"`
+				Init string `json:"init_string"`
 			} `json:"vendor_params"`
 		} `json:"vendor"`
 		PublicKey string `json:"public_key"`
@@ -189,7 +190,11 @@ func getMissURL(url *url.URL) (string, error) {
 	query.Set("sign", v.Sign)
 	query.Set("vendor", getVendorName(v.Vendor.ID))
 
-	if v.Vendor.ID == 1 {
+	if query.Get("transport")=="relay" {
+		if v.Vendor.ID!=4 || v.Vendor.Params.UID=="" || v.Vendor.Params.Init=="" {return "",errors.New("xiaomi: CS2 relay provisioning unavailable")}
+		query.Set("uid",v.Vendor.Params.UID)
+		query.Set("init_string",v.Vendor.Params.Init)
+	} else if v.Vendor.ID == 1 {
 		query.Set("uid", v.Vendor.Params.UID)
 	}
 
@@ -245,31 +250,27 @@ func apiDeviceList(w http.ResponseWriter, r *http.Request) {
 
 	err := func() error {
 		region := query.Get("region")
-		res, err := cloudRequest(user, region, "/v2/home/device_list_page", "{}")
-		if err != nil {
-			return err
-		}
-		var v struct {
-			List []*Device `json:"list"`
-		}
-
-		log.Trace().Str("user", user).Msgf("[xiaomi] devices list: %s", res)
-
-		if err = json.Unmarshal(res, &v); err != nil {
-			return err
-		}
-
+		cloud,err:=getCloud(user)
+		if err!=nil {return err}
+		devices,err:=xiaomi.DiscoverDevices(cloud,GetBaseURL(region),"")
+		if err!=nil {return err}
 		var items []*api.Source
-
-		for _, device := range v.List {
-			if !device.HasCamera() {
-				continue
+		for _,d:=range devices {
+			device:=Device{Did:d.DID,Name:d.Name,Model:d.Model,MAC:d.MAC,IP:d.IP}
+			if !device.HasCamera() {continue}
+			q:=url.Values{"did":{d.DID},"model":{d.Model}}
+			if d.IP!="" {
+				u:=url.URL{Scheme:"xiaomi",User:url.UserPassword(user,region),Host:d.IP,RawQuery:q.Encode()}
+				items=append(items,&api.Source{Name:d.Name,Info:"LAN · "+d.Model,URL:u.String()})
 			}
-			items = append(items, &api.Source{
-				Name: device.Name,
-				Info: fmt.Sprintf("ip: %s, mac: %s", device.IP, device.MAC),
-				URL:  fmt.Sprintf("xiaomi://%s:%s@%s?did=%s&model=%s", user, region, device.IP, device.Did, device.Model),
-			})
+			q.Set("transport","relay")
+			u:=url.URL{Scheme:"xiaomi",User:url.UserPassword(user,region),Host:"relay",RawQuery:q.Encode()}
+			items=append(items,&api.Source{Name:d.Name+" (公网中继)",Info:"CS2 Relay · "+d.Model,URL:u.String()})
+			if d.Model=="isa.camera.cw501d" {
+				q.Set("channel","1")
+				u.RawQuery=q.Encode()
+				items=append(items,&api.Source{Name:d.Name+" (公网中继 · 镜头 2)",Info:"CS2 Relay · "+d.Model,URL:u.String()})
+			}
 		}
 
 		api.ResponseSources(w, items)

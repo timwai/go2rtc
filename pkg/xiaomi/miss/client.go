@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -55,7 +56,11 @@ func NewClient(rawURL string) (*Client, error) {
 	var conn Conn
 	switch s := query.Get("vendor"); s {
 	case "cs2":
-		conn, err = cs2.Dial(u.Host, query.Get("transport"))
+		if query.Get("transport")=="relay" {
+			conn,err=cs2.DialRelay(query.Get("uid"),query.Get("init_string"))
+		} else {
+			conn, err = cs2.Dial(u.Host, query.Get("transport"))
+		}
 	case "tutk":
 		conn, err = tutk.Dial(u.Host, query.Get("uid"), "Miss", "client")
 	default:
@@ -66,13 +71,31 @@ func NewClient(rawURL string) (*Client, error) {
 		return nil, err
 	}
 
-	err = login(conn, query.Get("client_public"), query.Get("sign"))
+	if query.Get("transport")=="relay" && query.Get("vendor")=="cs2" {
+		_ = conn.SetDeadline(time.Now().Add(20*time.Second))
+		err=loginRelay(conn,query.Get("client_public"),query.Get("sign"))
+	} else {
+		err = login(conn, query.Get("client_public"), query.Get("sign"))
+	}
 	if err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
 
 	return &Client{Conn: conn, key: key, model: model}, nil
+}
+
+func loginRelay(conn Conn,pub,sign string) error {
+	body,_:=json.Marshal(map[string]any{"public_key":pub,"sign":sign,"uuid":"","support_encrypt":15})
+	if err:=conn.WriteCommand(cmdAuthReq,body);err!=nil {return err}
+	for {
+		cmd,data,err:=conn.ReadCommand()
+		if err!=nil {return err}
+		if cmd!=cmdAuthRes {continue}
+		var res struct {Result string `json:"result"`}
+		if json.Unmarshal(data,&res)!=nil || res.Result!="success" {return errors.New("miss: relay authentication rejected")}
+		return nil
+	}
 }
 
 type Client struct {
@@ -227,7 +250,7 @@ func (c *Client) ReadPacket() (*Packet, error) {
 		return nil, fmt.Errorf("miss: read media: %w", err)
 	}
 
-	if len(hdr) < hdrSize {
+	if len(hdr) < hdrSize || len(payload)<8 {
 		return nil, fmt.Errorf("miss: packet header too small")
 	}
 

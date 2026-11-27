@@ -115,11 +115,11 @@ func probe(client *Client, audio bool) ([]*core.Media, error) {
 			Codecs:    []*core.Codec{acodec},
 		})
 
-		medias = append(medias, &core.Media{
-			Kind:      core.KindAudio,
-			Direction: core.DirectionSendonly,
-			Codecs:    []*core.Codec{acodec.Clone()},
-		})
+		if client.Protocol()!="cs2+relay" {
+			medias = append(medias, &core.Media{
+				Kind: core.KindAudio, Direction: core.DirectionSendonly, Codecs: []*core.Codec{acodec.Clone()},
+			})
+		}
 	}
 
 	return medias, nil
