@@ -161,7 +161,15 @@ func probeMedia(s *net.UDPConn,peer netip.AddrPort,v vendorResponse,pub,priv []b
 								if codec==4 {r.VideoCodec="h264"} else {r.VideoCodec="h265";inspectHEVC(data,r)}
 							}
 						case 1024,1026,1027,1032:
-							if len(data)>0 {r.AudioPackets=true}
+							if len(data)>0 {
+								r.AudioPackets=true
+								switch codec {
+								case 1024: r.AudioCodec="pcm"
+								case 1026: r.AudioCodec="pcmu"
+								case 1027: r.AudioCodec="pcma"
+								case 1032: r.AudioCodec="opus"
+								}
+							}
 						}
 					}
 				}
